@@ -1,154 +1,153 @@
-# Don't Remove Credit Tg - @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
-import datetime
-import motor.motor_asyncio
-
-class Database:
-
-    def __init__(self, uri, database_name):
-        self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
-        self.clinton = self._client[database_name]
-        self.col = self.clinton.USERS
-
-    def new_user(self, id):
-        return dict(id=id, thumbnail=None)
-
-
-    async def add_user(self, id):
-        user = self.new_user(id)
-        await self.col.insert_one(user)
-
-    async def is_user_exist(self, id):
-        user = await self.col.find_one({'id': int(id)})
-        return True if user else False
-
-    async def total_users_count(self):
-        count = await self.col.count_documents({})
-        return count
-
-    async def get_all_users(self):
-        all_users = self.col.find({})
-        return all_users
-
-    async def delete_user(self, user_id):
-        await self.col.delete_many({'id': int(user_id)})
-
-    async def set_thumbnail(self, id, thumbnail):
-        await self.col.update_one({'id': id}, {'$set': {'thumbnail': thumbnail}})
-
-    async def get_thumbnail(self, id):
-        user = await self.col.find_one({'id': int(id)})
-        return user.get('thumbnail', None)
-
-
-
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from pymongo import MongoClient
+import random
+import string
+import os
 
-PLAN_DETAILS = {
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+client = MongoClient(MONGO_URL)
+db = client["vjupbot"]
+users_collection = db["users"]
+vip_codes_collection = db["vip_codes"]
+
+plans = {
     "free": {
         "daily_limit": 1 * 1024 * 1024 * 1024,
         "wait_time": 180,
-        "duration": None,
-        "restricted_domains": ["xvideos.com", "xnxx.com", "pornhub.com"]
+        "max_file_size": 100 * 1024 * 1024,
+        "duration_days": None,
     },
     "silver": {
         "daily_limit": 5 * 1024 * 1024 * 1024,
         "wait_time": 30,
-        "duration": 30,
-        "restricted_domains": []
+        "max_file_size": None,
+        "duration_days": 30,
     },
     "gold": {
         "daily_limit": 10 * 1024 * 1024 * 1024,
         "wait_time": 0,
-        "duration": 30,
-        "restricted_domains": []
+        "max_file_size": None,
+        "duration_days": 30,
     },
     "diamond": {
         "daily_limit": 30 * 1024 * 1024 * 1024,
         "wait_time": 0,
-        "duration": 30,
-        "restricted_domains": []
+        "max_file_size": None,
+        "duration_days": 30,
+    },
+    "gift": {
+        "daily_limit": 5 * 1024 * 1024 * 1024,
+        "wait_time": 0,
+        "max_file_size": None,
+        "duration_days": 7,
+    },
+    "vip": {
+        "daily_limit": 5 * 1024 * 1024 * 1024,
+        "wait_time": 0,
+        "max_file_size": None,
+        "duration_days": 15,
     }
 }
 
-def get_user_plan(user_id: int):
-    user = users_col.find_one({"_id": user_id})
+
+def get_user(user_id):
+    user = users_collection.find_one({"user_id": user_id})
     if not user:
-        users_col.insert_one({
-            "_id": user_id,
+        users_collection.insert_one({
+            "user_id": user_id,
             "plan": "free",
-            "daily_usage": 0,
-            "last_upload_time": None,
-            "plan_expiry": None
+            "plan_start": None,
+            "used_today": 0,
+            "last_upload": None,
         })
-        return "free"
-    return user.get("plan", "free")
+        return get_user(user_id)
+    return user
 
-def can_upload(user_id: int, file_size: int, url: str) -> (bool, str):
-    now = datetime.utcnow()
-    user = users_col.find_one({"_id": user_id})
-    
-    if not user:
-        get_user_plan(user_id)
-        user = users_col.find_one({"_id": user_id})
 
+def update_user(user_id, data: dict):
+    users_collection.update_one({"user_id": user_id}, {"$set": data})
+
+
+def reset_daily_usage():
+    users_collection.update_many({}, {"$set": {"used_today": 0}})
+
+
+def is_admin(user_id):
+    return str(user_id) in os.environ.get("ADMINS", "").split()
+
+
+def get_user_plan(user_id):
+    user = get_user(user_id)
     plan = user.get("plan", "free")
-    details = PLAN_DETAILS[plan]
+    plan_info = plans.get(plan, plans["free"])
 
-    expiry = user.get("plan_expiry")
-    if expiry and expiry < now:
-        users_col.update_one({"_id": user_id}, {
-            "$set": {
+    # Check expiration
+    if plan_info["duration_days"] and user.get("plan_start"):
+        expire_date = user["plan_start"] + timedelta(days=plan_info["duration_days"])
+        if datetime.utcnow() > expire_date:
+            update_user(user_id, {
                 "plan": "free",
-                "daily_usage": 0,
-                "plan_expiry": None
-            }
-        })
-        return False, "پلن شما به پایان رسیده و به پلن رایگان بازگشتید."
+                "plan_start": None
+            })
+            return plans["free"], "free"
+    return plan_info, plan
 
-    if user.get("daily_usage", 0) + file_size > details["daily_limit"]:
-        return False, "شما به حداکثر حجم مجاز روزانه در پلن فعلی رسیده‌اید."
 
-    last = user.get("last_upload_time")
-    if last:
-        delta = (now - last).total_seconds()
-        if delta < details["wait_time"]:
-            return False, f"لطفاً {int(details['wait_time'] - delta)} ثانیه دیگر صبر کنید."
-
-    domain = urlparse(url).netloc
-    for banned in details["restricted_domains"]:
-        if banned in domain:
-            return False, "آپلود از این سایت در پلن رایگان مجاز نیست."
-
-    return True, ""
-
-def update_usage(user_id: int, file_size: int):
-    users_col.update_one({"_id": user_id}, {
-        "$inc": {"daily_usage": file_size},
-        "$set": {"last_upload_time": datetime.utcnow()}
+def add_plan_to_user(user_id, plan_key):
+    now = datetime.utcnow()
+    update_user(user_id, {
+        "plan": plan_key,
+        "plan_start": now,
+        "used_today": 0
     })
 
 
-# ------------------- VIP Code System -------------------
-import datetime
+def can_upload(user_id, file_size):
+    user = get_user(user_id)
+    plan_info, plan_name = get_user_plan(user_id)
 
-async def create_vip_code(code: str):
-    await vip_codes.insert_one({
-        "code": code,
-        "used": False,
-        "used_by": None,
-        "created_at": datetime.datetime.utcnow()
-    })
+    max_file_size = plan_info["max_file_size"]
+    if max_file_size and file_size > max_file_size:
+        return False, f"حجم فایل بیشتر از حد مجاز پلن {plan_name} است."
 
-async def use_vip_code(code: str, user_id: int) -> bool:
-    vip = await vip_codes.find_one({"code": code, "used": False})
-    if not vip:
-        return False
-    await vip_codes.update_one(
-        {"code": code},
-        {"$set": {"used": True, "used_by": user_id, "used_at": datetime.datetime.utcnow()}}
+    today_used = user.get("used_today", 0)
+    if today_used + file_size > plan_info["daily_limit"]:
+        return False, f"سقف مصرف روزانه پلن {plan_name} تمام شده است."
+
+    return True, None
+
+
+def update_usage(user_id, file_size):
+    user = get_user(user_id)
+    today_used = user.get("used_today", 0)
+    users_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"used_today": today_used + file_size, "last_upload": datetime.utcnow()}}
     )
+
+
+def get_wait_time(user_id):
+    user = get_user(user_id)
+    plan_info, _ = get_user_plan(user_id)
+    wait_time = plan_info["wait_time"]
+    last_upload = user.get("last_upload")
+    if not last_upload:
+        return 0
+    elapsed = (datetime.utcnow() - last_upload).total_seconds()
+    remaining = wait_time - elapsed
+    return max(0, remaining)
+
+
+def create_vip_code():
+    code = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    vip_codes_collection.insert_one({"code": code, "used": False})
+    return code
+
+
+def use_vip_code(user_id, code):
+    code_data = vip_codes_collection.find_one({"code": code, "used": False})
+    if not code_data:
+        return False
+    vip_codes_collection.update_one({"code": code}, {"$set": {"used": True}})
+    add_plan_to_user(user_id, "vip")
     return True
