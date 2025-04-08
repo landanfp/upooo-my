@@ -10,16 +10,14 @@ async def generate_vip_code(client, message: Message):
     
     code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     await create_vip_code(code)
-    await message.reply(f"کد VIP ساخته شد:
-`{code}`")
+    await message.reply(f"کد VIP ساخته شد:\n`{code}`")
 
 @Client.on_message(filters.command("vip") & filters.private)
 async def use_code(client, message: Message):
     try:
         code = message.text.split(" ", 1)[1].strip()
     except IndexError:
-        return await message.reply("لطفاً کد VIP را وارد کنید.
-مثال: /vip ABCD1234")
+        return await message.reply("لطفاً کد VIP را وارد کنید.\nمثال: /vip ABCD1234")
 
     user_id = message.from_user.id
     plan = await get_user_plan(user_id)
